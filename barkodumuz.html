@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Barkod Okuyucu</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; padding: 10px; background: #f4f4f4; }
+    #reader { width: 100%; max-width: 400px; margin: auto; }
+    .result { margin-top: 20px; padding: 15px; background: #fff; border-radius: 10px; box-shadow: 0 2px 5px #ccc; }
+    .safe { color: green; font-weight: bold; }
+    .mid { color: orange; font-weight: bold; }
+    .low { color: #999; font-weight: bold; }
+    .danger { color: red; font-weight: bold; }
+    .warning { background: #fff3cd; padding: 10px; border-left: 5px solid orange; border-radius: 5px; margin-top: 10px; }
+    .health { margin-top: 15px; padding: 10px; border-left: 5px solid #444; border-radius: 5px; background: #e3f2fd; font-weight: bold; }
+    .doluluk { margin-top: 10px; padding: 10px; background: #e0f7fa; border-left: 5px solid #00796b; border-radius: 5px; }
+    button, input[type=file] { margin-top: 10px; display: block; width: 100%; }
+    a { word-break: break-word; }
+  </style>
+</head>
+<body>
+
+<h2>📦 Barkod Okuyucu + Sağlık & Boykot Analizi</h2>
+<div id="reader"></div>
+<button onclick="startCamera()">📷 Kamerayı Başlat</button>
+<button onclick="selectImage()">🖼️ QR / Barkod Fotoğrafı Seç</button>
+<input type="file" id="qr-input" accept="image/*" style="display:none">
+<div id="result" class="result"></div>
+
+<script>
+  let qr = new Html5Qrcode("reader");
+
+  const riskList = {
+    "e100": 0, "e101": 0, "şeker": 1, "tuz": 1, "e330": 1,
+    "e102": 2, "e110": 2, "e120": 2, "e621": 2, "gluten": 2,
+    "renklendirici": 2, "koruyucu": 2,
+    "e250": 3, "e211": 3, "e220": 3, "domuz": 3, "alkol": 3, "jelatin": 3
+  };
+
+  function analyzeIngredients(text) {
+    const list = text.toLowerCase().split(/[.,;|\n]+/).map(i => i.trim()).filter(i => i);
+    let totalRisk = 0, has3 = false, has2 = false, html = `<h3>📋 İçindekiler:</h3><ul>`;
+
+    list.forEach(item => {
+      let key = item.replace(/\s+/g, '').toLowerCase();
+      let level = null;
+
+      for (const risk in riskList) {
+        if (key.includes(risk)) {
+          level = riskList[risk];
+          break;
+        }
+      }
+
+      if (level === 0) {
+        html += `<li><span class="safe">✅ ${item} (Güvenli)</span></li>`;
+      } else if (level === 1) {
+        totalRisk += 1;
+        html += `<li><span class="low">⚠️ ${item} (Az zararlı)</span></li>`;
+      } else if (level === 2) {
+        totalRisk += 2;
+        has2 = true;
+        html += `<li><span class="mid">⚠️ ${item} (Orta zararlı)</span></li>`;
+      } else if (level === 3) {
+        totalRisk += 3;
+        has3 = true;
+        html += `<li><span class="danger">❌ ${item} (Çok zararlı)</span></li>`;
+      } else {
+        html += `<li>${item} (Bilinmiyor)</li>`;
+      }
+    });
+
+    html += `</ul>`;
+
+    let overall = "🟢 Sağlıklı ürün.";
+    let style = "color:green;";
+    if (has3) {
+      overall = "🔴 Sağlıksız ürün! İçeriğinde çok zararlı maddeler var.";
+      style = "color:red;";
+    } else if (has2) {
+      overall = "🟠 Şüpheli ürün. Orta düzeyde zararlı içerik olabilir.";
+      style = "color:orange;";
+    }
+
+    html += `<div class="health" style="${style}">${overall}</div>`;
+    return html;
+  }
+
+  function estimateFullness(quantityStr) {
+    if (!quantityStr) return null;
+    const match = quantityStr.match(/(\d+\.?\d*)\s*(ml|g)/i);
+    if (!match) return null;
+    const value = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+    const assumedCapacity = unit === "ml" ? 330 : 500;
+    const percent = Math.min(100, Math.round((value / assumedCapacity) * 100));
+    const empty = assumedCapacity - value;
+    let html = `<div class="doluluk">`;
+    html += `<p>📦 Doluluk: <strong>%${percent}</strong></p>`;
+    html += `<div style="background:#ddd; width:100%; height:12px; border-radius:5px; overflow:hidden;">
+              <div style="width:${percent}%; background:#4caf50; height:100%;"></div></div>`;
+    html += `<p>💨 Boşluk: <strong>${empty} ${unit}</strong></p>`;
+    if (percent < 60) {
+      html += `<p style="color:red;"><strong>⚠️ Dikkat:</strong> Ambalajın çoğu boş olabilir.</p>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function handleBarcode(barcode) {
+    fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
+      .then(res => res.json())
+      .then(data => {
+        const div = document.getElementById("result");
+        div.innerHTML = "";
+
+        if (data.status === 1) {
+          const p = data.product;
+          const productName = p.product_name || "Bilinmiyor";
+          const brand = p.brands || "Bilinmiyor";
+
+          div.innerHTML += `<h3>✅ Ürün: ${productName}</h3>`;
+          div.innerHTML += `<p><strong>Marka:</strong> ${brand}</p>`;
+
+          // Doluluk
+          if (p.quantity) div.innerHTML += estimateFullness(p.quantity);
+
+          // İçindekiler
+          if (p.ingredients_text) {
+            div.innerHTML += analyzeIngredients(p.ingredients_text);
+          } else {
+            div.innerHTML += `<p class="warning">İçindekiler bilgisi eksik.</p>`;
+          }
+
+          // Boykot durumu Google araması
+          if (brand !== "Bilinmiyor") {
+            const searchLink = `https://www.google.com/search?q=${encodeURIComponent(brand)}+İsrail'e+destek+veriyor+mu`;
+            div.innerHTML += `<div class="warning">🔎 <strong>${brand}</strong> markası İsrail'e destek veriyor mu?<br>
+              <a href="${searchLink}" target="_blank">Google’da araştırmak için tıkla</a></div>`;
+          }
+
+        } else {
+          showGoogleResult(barcode);
+        }
+      })
+      .catch(() => showGoogleResult(barcode));
+  }
+
+  function showGoogleResult(code) {
+    const div = document.getElementById("result");
+    div.innerHTML = `<h3>❓ Ürün bilgisi bulunamadı</h3>
+      <p>Bu barkod için veri yok. Google’da arayabilirsin:</p>
+      <div class="warning">🔍 
+        <a href="https://www.google.com/search?q=${code}+ürün+barkod" target="_blank">
+        ${code} barkodlu ürünü Google'da ara</a></div>`;
+  }
+
+  function startCamera() {
+    qr.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      (text) => {
+        qr.stop();
+        handleBarcode(text);
+      },
+      (err) => {}
+    ).catch(err => {
+      document.getElementById("result").innerHTML = `<p class="warning">Kamera başlatılamadı: ${err}</p>`;
+    });
+  }
+
+  function selectImage() {
+    document.getElementById("qr-input").click();
+  }
+
+  document.getElementById("qr-input").addEventListener("change", function(evt) {
+    const file = evt.target.files[0];
+    if (!file) return;
+    qr.scanFile(file, true)
+      .then((result) => handleBarcode(result))
+      .catch(err => {
+        document.getElementById("result").innerHTML = `<p class="warning">Fotoğraftan barkod okunamadı: ${err}</p>`;
+      });
+  });
+</script>
+
+</body>
+</html>
